@@ -56,6 +56,32 @@ type TradeSuggestion = {
   rationale: string;
 };
 
+type StocksApiResponse = {
+  ticker: string;
+  stockPrice: string | null;
+  priceHistory: Array<{ date: string; price: number }>;
+  candles: ChartCandle[];
+  chartInterval: ReturnType<typeof resolveChartSelection>["interval"];
+  chartRange: ReturnType<typeof resolveChartSelection>["range"];
+  chartWarning: string | null;
+  tradeSuggestion: TradeSuggestion;
+  articles: Array<{
+    title: string;
+    sourceName: string;
+    publishedAt: string;
+    url: string;
+  }>;
+  analysis: ReturnType<typeof parseAnalysisJson>;
+};
+
+type CacheEntry = {
+  expiresAt: number;
+  payload: StocksApiResponse;
+};
+
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const tickerCache = new Map<string, CacheEntry>();
+
 function avg(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, v) => sum + v, 0) / values.length;
@@ -216,6 +242,19 @@ export async function GET(req: Request) {
     searchParams.get("chartInterval"),
     searchParams.get("chartRange"),
   );
+
+  const now = Date.now();
+  const cached = tickerCache.get(tickerRaw);
+  if (cached) {
+    if (
+      cached.expiresAt > now &&
+      cached.payload.chartInterval === chartSelection.interval &&
+      cached.payload.chartRange === chartSelection.range
+    ) {
+      return NextResponse.json(cached.payload);
+    }
+    if (cached.expiresAt <= now) tickerCache.delete(tickerRaw);
+  }
 
   const tdInterval = chartIntervalToTwelveData(chartSelection.interval);
   const bounds = rangeToDateBounds(chartSelection.range);
@@ -378,7 +417,7 @@ export async function GET(req: Request) {
               "Insufficient reliable historical data to calculate a higher-confidence setup.",
           };
 
-    return NextResponse.json({
+    const responsePayload: StocksApiResponse = {
       ticker: tickerRaw,
       stockPrice,
       priceHistory,
@@ -389,7 +428,14 @@ export async function GET(req: Request) {
       tradeSuggestion,
       articles,
       analysis,
+    };
+
+    tickerCache.set(tickerRaw, {
+      expiresAt: Date.now() + CACHE_TTL_MS,
+      payload: responsePayload,
     });
+
+    return NextResponse.json(responsePayload);
   } catch (err) {
     console.error(err);
     const message = err instanceof Error ? err.message : "Internal server error";

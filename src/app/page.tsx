@@ -76,6 +76,20 @@ type StockPayload = {
   analysis: Analysis;
 };
 
+type BullishIdea = {
+  ticker: string;
+  confidence: number;
+  projectedIncreasePct: number;
+  currentPrice: number;
+};
+
+type BearishIdea = {
+  ticker: string;
+  confidence: number;
+  projectedDecreasePct: number;
+  currentPrice: number;
+};
+
 const INTERVAL_LABELS: Record<ChartIntervalId, string> = {
   "1min": "1 min (intraday)",
   "5min": "5 min (intraday)",
@@ -463,6 +477,140 @@ function IntroSplash({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
+function BullishIdeasPanel({
+  ideas,
+  loading,
+  error,
+  onSelect,
+}: {
+  ideas: BullishIdea[];
+  loading: boolean;
+  error: string | null;
+  onSelect: (ticker: string) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-white/[0.08] bg-zinc-900/45 p-6 shadow-xl shadow-black/35 backdrop-blur-md ring-1 ring-white/[0.04]">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
+          Top bullish opportunities
+        </h2>
+        <span className="text-xs text-zinc-500">Ranked 1-4</span>
+      </div>
+      <p className="mt-2 text-xs text-zinc-500">
+        Ranked by bullish confidence first, then projected upside target.
+      </p>
+      {loading ? (
+        <p className="mt-4 text-sm text-zinc-400">Scanning market leaders...</p>
+      ) : error ? (
+        <p className="mt-4 text-sm text-red-300">{error}</p>
+      ) : ideas.length === 0 ? (
+        <p className="mt-4 text-sm text-zinc-400">
+          No strong bullish setups found right now.
+        </p>
+      ) : (
+        <ul className="mt-4 space-y-2">
+          {ideas.map((idea, idx) => (
+            <li key={idea.ticker}>
+              <button
+                type="button"
+                onClick={() => onSelect(idea.ticker)}
+                className="flex w-full items-center justify-between rounded-xl border border-white/[0.08] bg-zinc-950/55 px-3 py-2 text-left transition hover:border-emerald-500/35 hover:bg-zinc-900/70"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 text-xs font-semibold text-zinc-300">
+                    {idx + 1}
+                  </span>
+                  <div>
+                    <p className="font-medium text-zinc-100">{idea.ticker}</p>
+                    <p className="text-xs text-zinc-500">
+                      Last: ${idea.currentPrice.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-medium text-emerald-300">
+                    +{idea.projectedIncreasePct.toFixed(2)}%
+                  </p>
+                  <p className="text-xs text-zinc-400">
+                    {idea.confidence}% confidence
+                  </p>
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function BearishIdeasPanel({
+  ideas,
+  loading,
+  error,
+  onSelect,
+}: {
+  ideas: BearishIdea[];
+  loading: boolean;
+  error: string | null;
+  onSelect: (ticker: string) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-white/[0.08] bg-zinc-900/45 p-6 shadow-xl shadow-black/35 backdrop-blur-md ring-1 ring-white/[0.04]">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
+          Top bearish opportunities
+        </h2>
+        <span className="text-xs text-zinc-500">Ranked 1-4</span>
+      </div>
+      <p className="mt-2 text-xs text-zinc-500">
+        Ranked by bearish confidence first, then projected downside target.
+      </p>
+      {loading ? (
+        <p className="mt-4 text-sm text-zinc-400">Scanning market leaders...</p>
+      ) : error ? (
+        <p className="mt-4 text-sm text-red-300">{error}</p>
+      ) : ideas.length === 0 ? (
+        <p className="mt-4 text-sm text-zinc-400">
+          No strong bearish setups found right now.
+        </p>
+      ) : (
+        <ul className="mt-4 space-y-2">
+          {ideas.map((idea, idx) => (
+            <li key={idea.ticker}>
+              <button
+                type="button"
+                onClick={() => onSelect(idea.ticker)}
+                className="flex w-full items-center justify-between rounded-xl border border-white/[0.08] bg-zinc-950/55 px-3 py-2 text-left transition hover:border-red-500/35 hover:bg-zinc-900/70"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 text-xs font-semibold text-zinc-300">
+                    {idx + 1}
+                  </span>
+                  <div>
+                    <p className="font-medium text-zinc-100">{idea.ticker}</p>
+                    <p className="text-xs text-zinc-500">
+                      Last: ${idea.currentPrice.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-medium text-red-300">
+                    -{idea.projectedDecreasePct.toFixed(2)}%
+                  </p>
+                  <p className="text-xs text-zinc-400">
+                    {idea.confidence}% confidence
+                  </p>
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export default function Home() {
   const [input, setInput] = useState("");
   const [query, setQuery] = useState<SearchQuery | null>(null);
@@ -472,6 +620,12 @@ export default function Home() {
   const [accountSize, setAccountSize] = useState("10000");
   const [riskPercent, setRiskPercent] = useState("1");
   const [rewardRiskRatio, setRewardRiskRatio] = useState("2");
+  const [bullishIdeas, setBullishIdeas] = useState<BullishIdea[]>([]);
+  const [bullishLoading, setBullishLoading] = useState(true);
+  const [bullishError, setBullishError] = useState<string | null>(null);
+  const [bearishIdeas, setBearishIdeas] = useState<BearishIdea[]>([]);
+  const [bearishLoading, setBearishLoading] = useState(true);
+  const [bearishError, setBearishError] = useState<string | null>(null);
   const [chartInterval, setChartInterval] =
     useState<ChartIntervalId>("daily");
   const [chartRange, setChartRange] = useState<ChartRangeId>("1m");
@@ -491,6 +645,17 @@ export default function Home() {
     window.dispatchEvent(new Event(INTRO_UPDATED_EVENT));
   };
 
+  const selectTickerFromIdeas = (ticker: string) => {
+    setInput(ticker);
+    setError(null);
+    setLoading(true);
+    setQuery({
+      ticker,
+      chartInterval,
+      chartRange,
+    });
+  };
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const t = input.trim().toUpperCase();
@@ -506,6 +671,53 @@ export default function Home() {
       chartRange,
     });
   };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/top-bullish", { signal: controller.signal })
+      .then(async (res) => {
+        const body = (await res.json()) as {
+          ideas?: BullishIdea[];
+          error?: string;
+        };
+        if (!res.ok) {
+          throw new Error(body.error ?? "Unable to load bullish ideas.");
+        }
+        setBullishIdeas(Array.isArray(body.ideas) ? body.ideas : []);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "AbortError") return;
+        setBullishIdeas([]);
+        setBullishError(
+          err instanceof Error ? err.message : "Unable to load bullish ideas.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setBullishLoading(false);
+      });
+    fetch("/api/top-bearish", { signal: controller.signal })
+      .then(async (res) => {
+        const body = (await res.json()) as {
+          ideas?: BearishIdea[];
+          error?: string;
+        };
+        if (!res.ok) {
+          throw new Error(body.error ?? "Unable to load bearish ideas.");
+        }
+        setBearishIdeas(Array.isArray(body.ideas) ? body.ideas : []);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "AbortError") return;
+        setBearishIdeas([]);
+        setBearishError(
+          err instanceof Error ? err.message : "Unable to load bearish ideas.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setBearishLoading(false);
+      });
+    return () => controller.abort();
+  }, []);
 
   const updateChartInterval = (next: ChartIntervalId) => {
     const allowed = allowedRangesForInterval(next);
@@ -692,6 +904,24 @@ export default function Home() {
             Search
           </button>
         </form>
+        {input.trim().length === 0 && !data && (
+          <div className="mt-5">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <BullishIdeasPanel
+                ideas={bullishIdeas}
+                loading={bullishLoading}
+                error={bullishError}
+                onSelect={selectTickerFromIdeas}
+              />
+              <BearishIdeasPanel
+                ideas={bearishIdeas}
+                loading={bearishLoading}
+                error={bearishError}
+                onSelect={selectTickerFromIdeas}
+              />
+            </div>
+          </div>
+        )}
 
         {loading && (
           <div className="mt-10 flex items-center gap-3 text-zinc-400">
@@ -982,6 +1212,21 @@ export default function Home() {
                 Educational use only. Markets are uncertain and losses are possible.
               </p>
             </section>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <BullishIdeasPanel
+                ideas={bullishIdeas}
+                loading={bullishLoading}
+                error={bullishError}
+                onSelect={selectTickerFromIdeas}
+              />
+              <BearishIdeasPanel
+                ideas={bearishIdeas}
+                loading={bearishLoading}
+                error={bearishError}
+                onSelect={selectTickerFromIdeas}
+              />
+            </div>
 
             <section>
               <h2 className="text-lg font-semibold text-white">News feed</h2>

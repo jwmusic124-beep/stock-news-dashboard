@@ -347,7 +347,7 @@ type SearchQuery = {
   chartRange: ChartRangeId;
 };
 
-const INTRO_STORAGE_KEY = "stock-news-dashboard-welcome-v1";
+const INTRO_STORAGE_KEY = "signaldesk-welcome-v1";
 const INTRO_UPDATED_EVENT = "snd-intro-updated";
 
 function subscribeIntroDismissed(onChange: () => void) {

@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+:root {
+  --background: #030712;
+  --foreground: #f4f4f5;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@keyframes aurora-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(4%, -6%) scale(1.05);
+  }
+  66% {
+    transform: translate(-5%, 4%) scale(0.98);
+  }
+}
+
+@keyframes aurora-drift-reverse {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1.02);
+  }
+  50% {
+    transform: translate(-6%, 5%) scale(1);
+  }
+}
+
+@keyframes grid-pan {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 48px 48px;
+  }
+}
+
+@keyframes intro-backdrop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes intro-card {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dynamic-bg-blob {
+    animation: none !important;
+  }
+
+  .dynamic-bg-grid {
+    animation: none !important;
+  }
+}

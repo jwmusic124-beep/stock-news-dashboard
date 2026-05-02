@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/refresh-top-opportunities",
-      "schedule": "15 */4 * * *"
+      "schedule": "15 6 * * *"
     }
   ]
 }

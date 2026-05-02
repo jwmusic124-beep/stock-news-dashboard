@@ -63,6 +63,35 @@ type CandlePoint = {
   close: number;
 };
 
+type TechnicalSignal = {
+  type: "fvg" | "imbalance" | "liquidity_level" | "liquidity_sweep" | "structure";
+  bias: "bullish" | "neutral" | "bearish";
+  title: string;
+  description: string;
+  priceTop: number;
+  priceBottom: number;
+  strength: number;
+  candleLabel: string;
+  anchorTs?: number;
+};
+
+type TechnicalAnalysisPayload = {
+  summary: {
+    bias: "bullish" | "neutral" | "bearish";
+    confidence: number;
+    notes: string[];
+    keyLevels: number[];
+  };
+  signals: TechnicalSignal[];
+  ai: {
+    bias: "bullish" | "neutral" | "bearish";
+    confidence: number;
+    key_factors: [string, string, string];
+    summary: string;
+    invalidation: string;
+  };
+};
+
 type StockPayload = {
   ticker: string;
   stockPrice: string | null;
@@ -74,6 +103,7 @@ type StockPayload = {
   tradeSuggestion: TradeSuggestion;
   articles: Article[];
   analysis: Analysis;
+  technicalAnalysis: TechnicalAnalysisPayload;
 };
 
 type BullishIdea = {
@@ -111,6 +141,22 @@ const RANGE_LABELS: Record<ChartRangeId, string> = {
   "5y": "5 years",
   max: "Max (all returned)",
 };
+
+function envFlagEnabled(raw: string | undefined, fallback = true): boolean {
+  if (!raw) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  return (
+    normalized !== "0" &&
+    normalized !== "false" &&
+    normalized !== "off" &&
+    normalized !== "no"
+  );
+}
+
+const TOP_OPPORTUNITIES_ENABLED = envFlagEnabled(
+  process.env.NEXT_PUBLIC_TOP_OPPORTUNITIES_ENABLED,
+  true,
+);
 
 function takeProfitForRewardRisk(
   suggestion: TradeSuggestion,
@@ -620,11 +666,17 @@ export default function Home() {
   const [accountSize, setAccountSize] = useState("10000");
   const [riskPercent, setRiskPercent] = useState("1");
   const [rewardRiskRatio, setRewardRiskRatio] = useState("2");
+  const [showAllFvg, setShowAllFvg] = useState(false);
+  const [showAllImbalance, setShowAllImbalance] = useState(false);
   const [bullishIdeas, setBullishIdeas] = useState<BullishIdea[]>([]);
-  const [bullishLoading, setBullishLoading] = useState(true);
+  const [bullishLoading, setBullishLoading] = useState(
+    TOP_OPPORTUNITIES_ENABLED,
+  );
   const [bullishError, setBullishError] = useState<string | null>(null);
   const [bearishIdeas, setBearishIdeas] = useState<BearishIdea[]>([]);
-  const [bearishLoading, setBearishLoading] = useState(true);
+  const [bearishLoading, setBearishLoading] = useState(
+    TOP_OPPORTUNITIES_ENABLED,
+  );
   const [bearishError, setBearishError] = useState<string | null>(null);
   const [chartInterval, setChartInterval] =
     useState<ChartIntervalId>("daily");
@@ -673,6 +725,16 @@ export default function Home() {
   };
 
   useEffect(() => {
+    if (!TOP_OPPORTUNITIES_ENABLED) {
+      setBullishIdeas([]);
+      setBearishIdeas([]);
+      setBullishError(null);
+      setBearishError(null);
+      setBullishLoading(false);
+      setBearishLoading(false);
+      return;
+    }
+
     const controller = new AbortController();
     fetch("/api/top-bullish", { signal: controller.signal })
       .then(async (res) => {
@@ -773,6 +835,22 @@ export default function Home() {
         body.chartRange = body.chartRange ?? cr;
         body.chartWarning =
           body.chartWarning === undefined ? null : body.chartWarning;
+        body.technicalAnalysis = body.technicalAnalysis ?? {
+          summary: {
+            bias: "neutral",
+            confidence: 20,
+            notes: ["Technical analysis is unavailable for this response."],
+            keyLevels: [],
+          },
+          signals: [],
+          ai: {
+            bias: "neutral",
+            confidence: 20,
+            key_factors: ["—", "—", "—"],
+            summary: "Technical AI analysis unavailable.",
+            invalidation: "No invalidation level available.",
+          },
+        };
         setData(body);
         setChartInterval(body.chartInterval);
         setChartRange(body.chartRange);
@@ -865,6 +943,39 @@ export default function Home() {
     };
   }, [accountSize, riskPercent, data]);
 
+  const fvgSignals = useMemo(
+    () =>
+      (data?.technicalAnalysis.signals ?? [])
+        .filter((s) => s.type === "fvg")
+        .sort(
+          (a, b) =>
+            (b.anchorTs ?? 0) - (a.anchorTs ?? 0) || b.strength - a.strength,
+        ),
+    [data],
+  );
+  const imbalanceSignals = useMemo(
+    () =>
+      (data?.technicalAnalysis.signals ?? [])
+        .filter((s) => s.type === "imbalance")
+        .sort(
+          (a, b) =>
+            (b.anchorTs ?? 0) - (a.anchorTs ?? 0) || b.strength - a.strength,
+        ),
+    [data],
+  );
+  const otherTechnicalSignals = useMemo(
+    () =>
+      (data?.technicalAnalysis.signals ?? []).filter(
+        (s) => s.type !== "fvg" && s.type !== "imbalance",
+      ),
+    [data],
+  );
+
+  useEffect(() => {
+    setShowAllFvg(false);
+    setShowAllImbalance(false);
+  }, [data?.ticker, data?.chartInterval, data?.chartRange]);
+
   return (
     <div className="relative min-h-screen overflow-x-hidden text-zinc-100">
       <DynamicBackground />
@@ -904,7 +1015,7 @@ export default function Home() {
             Search
           </button>
         </form>
-        {input.trim().length === 0 && !data && (
+        {TOP_OPPORTUNITIES_ENABLED && input.trim().length === 0 && !data && (
           <div className="mt-5">
             <div className="grid gap-4 lg:grid-cols-2">
               <BullishIdeasPanel
@@ -1040,6 +1151,177 @@ export default function Home() {
               <p className="mt-4 text-sm leading-relaxed text-zinc-400">
                 {data.analysis.summary}
               </p>
+            </section>
+
+            <section className="rounded-2xl border border-white/[0.08] bg-zinc-900/45 p-6 shadow-xl shadow-black/35 backdrop-blur-md ring-1 ring-white/[0.04]">
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="text-lg font-semibold text-white">
+                  Technical analysis (chart-based)
+                </h2>
+                <span
+                  className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${sentimentStyles[data.technicalAnalysis.summary.bias].className}`}
+                >
+                  Scan: {sentimentStyles[data.technicalAnalysis.summary.bias].label}
+                </span>
+                <span className="text-sm text-zinc-400">
+                  Scan confidence:{" "}
+                  <span className="font-medium text-zinc-200">
+                    {Math.round(data.technicalAnalysis.summary.confidence)}%
+                  </span>
+                </span>
+                <span
+                  className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${sentimentStyles[data.technicalAnalysis.ai.bias].className}`}
+                >
+                  AI: {sentimentStyles[data.technicalAnalysis.ai.bias].label}
+                </span>
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+                {data.technicalAnalysis.ai.summary}
+              </p>
+              <p className="mt-2 text-xs text-zinc-500">
+                Invalidation: {data.technicalAnalysis.ai.invalidation}
+              </p>
+              <ul className="mt-4 list-inside list-disc space-y-1 text-sm text-zinc-300">
+                {data.technicalAnalysis.ai.key_factors.map((factor, i) => (
+                  <li key={`tech-factor-${i}`}>{factor}</li>
+                ))}
+              </ul>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {data.technicalAnalysis.summary.keyLevels.length > 0 ? (
+                  data.technicalAnalysis.summary.keyLevels.map((level, idx) => (
+                    <span
+                      key={`key-level-${idx}`}
+                      className="rounded-full border border-white/[0.1] bg-zinc-950/60 px-2.5 py-1 text-xs text-zinc-300"
+                    >
+                      Key level: ${level.toFixed(2)}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-zinc-500">No key levels detected.</span>
+                )}
+              </div>
+              <div className="mt-4 space-y-2">
+                {fvgSignals.length > 0 ? (
+                  <div className="rounded-lg border border-white/[0.07] bg-zinc-950/50 px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAllFvg((v) => !v)}
+                      className="flex w-full items-center justify-between text-left"
+                    >
+                      <p className="text-sm font-medium text-zinc-100">
+                        Fair value gaps ({fvgSignals.length})
+                      </p>
+                      <span className="text-xs text-zinc-400">
+                        {showAllFvg ? "Hide older bars" : "Show older bars"}
+                      </span>
+                    </button>
+                    <div className="mt-2 space-y-2">
+                      {(showAllFvg ? fvgSignals : fvgSignals.slice(0, 1)).map(
+                        (signal, idx) => (
+                          <div
+                            key={`${signal.title}-${signal.candleLabel}-${idx}`}
+                            className="rounded-lg border border-white/[0.07] bg-zinc-900/50 px-3 py-2"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${sentimentStyles[signal.bias].className}`}
+                              >
+                                {sentimentStyles[signal.bias].label}
+                              </span>
+                              <p className="text-sm font-medium text-zinc-100">
+                                {signal.title}
+                              </p>
+                              <span className="text-xs text-zinc-500">
+                                {signal.candleLabel}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-xs text-zinc-400">
+                              {signal.description} Zone: $
+                              {signal.priceBottom.toFixed(2)} - $
+                              {signal.priceTop.toFixed(2)}.
+                            </p>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+
+                {imbalanceSignals.length > 0 ? (
+                  <div className="rounded-lg border border-white/[0.07] bg-zinc-950/50 px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAllImbalance((v) => !v)}
+                      className="flex w-full items-center justify-between text-left"
+                    >
+                      <p className="text-sm font-medium text-zinc-100">
+                        Imbalance candles ({imbalanceSignals.length})
+                      </p>
+                      <span className="text-xs text-zinc-400">
+                        {showAllImbalance ? "Hide older bars" : "Show older bars"}
+                      </span>
+                    </button>
+                    <div className="mt-2 space-y-2">
+                      {(showAllImbalance
+                        ? imbalanceSignals
+                        : imbalanceSignals.slice(0, 1)
+                      ).map((signal, idx) => (
+                        <div
+                          key={`${signal.title}-${signal.candleLabel}-${idx}`}
+                          className="rounded-lg border border-white/[0.07] bg-zinc-900/50 px-3 py-2"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${sentimentStyles[signal.bias].className}`}
+                            >
+                              {sentimentStyles[signal.bias].label}
+                            </span>
+                            <p className="text-sm font-medium text-zinc-100">
+                              {signal.title}
+                            </p>
+                            <span className="text-xs text-zinc-500">
+                              {signal.candleLabel}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-zinc-400">
+                            {signal.description} Zone: $
+                            {signal.priceBottom.toFixed(2)} - $
+                            {signal.priceTop.toFixed(2)}.
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {otherTechnicalSignals.slice(0, 8).map((signal, idx) => (
+                  <div
+                    key={`${signal.title}-${signal.candleLabel}-${idx}`}
+                    className="rounded-lg border border-white/[0.07] bg-zinc-950/50 px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${sentimentStyles[signal.bias].className}`}
+                      >
+                        {sentimentStyles[signal.bias].label}
+                      </span>
+                      <p className="text-sm font-medium text-zinc-100">
+                        {signal.title}
+                      </p>
+                      <span className="text-xs text-zinc-500">{signal.candleLabel}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      {signal.description} Zone: ${signal.priceBottom.toFixed(2)} - $
+                      {signal.priceTop.toFixed(2)}.
+                    </p>
+                  </div>
+                ))}
+                {data.technicalAnalysis.signals.length === 0 ? (
+                  <p className="text-sm text-zinc-500">
+                    No strong FVG/liquidity/structure signals detected on this timeframe.
+                  </p>
+                ) : null}
+              </div>
             </section>
 
             <section className="rounded-2xl border border-white/[0.08] bg-zinc-900/45 p-6 shadow-xl shadow-black/35 backdrop-blur-md ring-1 ring-white/[0.04]">
@@ -1213,20 +1495,22 @@ export default function Home() {
               </p>
             </section>
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              <BullishIdeasPanel
-                ideas={bullishIdeas}
-                loading={bullishLoading}
-                error={bullishError}
-                onSelect={selectTickerFromIdeas}
-              />
-              <BearishIdeasPanel
-                ideas={bearishIdeas}
-                loading={bearishLoading}
-                error={bearishError}
-                onSelect={selectTickerFromIdeas}
-              />
-            </div>
+            {TOP_OPPORTUNITIES_ENABLED ? (
+              <div className="grid gap-4 lg:grid-cols-2">
+                <BullishIdeasPanel
+                  ideas={bullishIdeas}
+                  loading={bullishLoading}
+                  error={bullishError}
+                  onSelect={selectTickerFromIdeas}
+                />
+                <BearishIdeasPanel
+                  ideas={bearishIdeas}
+                  loading={bearishLoading}
+                  error={bearishError}
+                  onSelect={selectTickerFromIdeas}
+                />
+              </div>
+            ) : null}
 
             <section>
               <h2 className="text-lg font-semibold text-white">News feed</h2>

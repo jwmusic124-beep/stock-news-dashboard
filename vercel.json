@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/refresh-top-opportunities",
+      "schedule": "15 */4 * * *"
+    }
+  ]
+}

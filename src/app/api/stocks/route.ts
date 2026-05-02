@@ -10,9 +10,31 @@ import {
   type ChartCandle,
 } from "@/lib/twelve-data-chart";
 import { env } from "@/lib/env";
+import { getRedis } from "@/lib/redis";
+import {
+  analyzeTechnicalSignals,
+  type TechnicalAnalysisResult,
+} from "@/lib/technical-analysis";
 
-const SYSTEM_PROMPT =
-  "You are a stock market analyst. Analyze these news headlines and return ONLY a valid JSON object with these exact fields: sentiment (string: bullish, neutral, or bearish), confidence (number 0-100), key_factors (array of exactly 3 strings), summary (string: one paragraph)";
+const COMBINED_AI_SYSTEM_PROMPT =
+  "Return ONLY valid JSON (no markdown code fences) with exactly this shape:\n" +
+  "{\n" +
+  '  "news": {\n' +
+  '    "sentiment": "bullish" | "neutral" | "bearish",\n' +
+  '    "confidence": number,\n' +
+  '    "key_factors": [string, string, string],\n' +
+  '    "summary": string\n' +
+  "  },\n" +
+  '  "technical": {\n' +
+  '    "bias": "bullish" | "neutral" | "bearish",\n' +
+  '    "confidence": number,\n' +
+  '    "key_factors": [string, string, string],\n' +
+  '    "summary": string,\n' +
+  '    "invalidation": string\n' +
+  "  }\n" +
+  "}\n" +
+  "Task A (news): You are a stock market analyst. Analyze ONLY the provided headlines.\n" +
+  "Task B (technical): You are a technical analyst. Use ONLY the TECHNICAL_SCAN JSON (summary, topSignals, recentCandles). Do not invent prices or candles not implied there.";
 
 function parseAnalysisJson(content: string): {
   sentiment: "bullish" | "neutral" | "bearish";
@@ -47,6 +69,60 @@ function parseAnalysisJson(content: string): {
   };
 }
 
+function parseTechnicalAnalysisJson(content: string): {
+  bias: "bullish" | "neutral" | "bearish";
+  confidence: number;
+  key_factors: [string, string, string];
+  summary: string;
+  invalidation: string;
+} {
+  const trimmed = content.trim();
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const raw = fence ? fence[1].trim() : trimmed;
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const b = String(parsed.bias ?? "neutral").toLowerCase();
+  const bias: "bullish" | "neutral" | "bearish" =
+    b === "bullish" || b === "bearish" ? b : "neutral";
+  const confidence = Math.min(
+    100,
+    Math.max(0, Number(parsed.confidence) || 0),
+  );
+  const factors = Array.isArray(parsed.key_factors)
+    ? parsed.key_factors.map(String)
+    : [];
+  const key_factors: [string, string, string] = [
+    factors[0] ?? "",
+    factors[1] ?? "",
+    factors[2] ?? "",
+  ];
+  return {
+    bias,
+    confidence,
+    key_factors,
+    summary: String(parsed.summary ?? ""),
+    invalidation: String(parsed.invalidation ?? ""),
+  };
+}
+
+function parseCombinedAiJson(content: string): {
+  analysis: ReturnType<typeof parseAnalysisJson>;
+  technicalAi: ReturnType<typeof parseTechnicalAnalysisJson>;
+} {
+  const trimmed = content.trim();
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const raw = fence ? fence[1].trim() : trimmed;
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const news = parsed.news;
+  const technical = parsed.technical;
+  if (!news || typeof news !== "object" || !technical || typeof technical !== "object") {
+    throw new Error("Combined AI JSON missing news or technical object");
+  }
+  return {
+    analysis: parseAnalysisJson(JSON.stringify(news)),
+    technicalAi: parseTechnicalAnalysisJson(JSON.stringify(technical)),
+  };
+}
+
 type TradeSuggestion = {
   action: "buy" | "short" | "wait";
   entry: number;
@@ -72,6 +148,9 @@ type StocksApiResponse = {
     url: string;
   }>;
   analysis: ReturnType<typeof parseAnalysisJson>;
+  technicalAnalysis: TechnicalAnalysisResult & {
+    ai: ReturnType<typeof parseTechnicalAnalysisJson>;
+  };
 };
 
 type CacheEntry = {
@@ -79,8 +158,20 @@ type CacheEntry = {
   payload: StocksApiResponse;
 };
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
+/** In-process cache TTL aligns with Redis hot cache when env is set (default 15m). */
+function memoryCacheTtlMs(): number {
+  return env.stocksCacheTtlSeconds() * 1000;
+}
+
 const tickerCache = new Map<string, CacheEntry>();
+
+function memoryCacheKey(
+  ticker: string,
+  interval: string,
+  range: string,
+): string {
+  return `${ticker}:${interval}:${range}`;
+}
 
 function avg(values: number[]): number {
   if (values.length === 0) return 0;
@@ -243,17 +334,41 @@ export async function GET(req: Request) {
     searchParams.get("chartRange"),
   );
 
+  const redis = getRedis();
+  const redisStockKey = `sd:stocks:v1:${tickerRaw}:${chartSelection.interval}:${chartSelection.range}`;
+  const redisStaleKey = `${redisStockKey}:stale`;
+
+  if (redis) {
+    const cachedBody = await redis.get(redisStockKey);
+    if (typeof cachedBody === "string" && cachedBody.length > 0) {
+      try {
+        return NextResponse.json(JSON.parse(cachedBody) as StocksApiResponse, {
+          headers: { "x-signaldesk-cache": "redis" },
+        });
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+
+  const memKey = memoryCacheKey(
+    tickerRaw,
+    chartSelection.interval,
+    chartSelection.range,
+  );
   const now = Date.now();
-  const cached = tickerCache.get(tickerRaw);
+  const cached = tickerCache.get(memKey);
   if (cached) {
     if (
       cached.expiresAt > now &&
       cached.payload.chartInterval === chartSelection.interval &&
       cached.payload.chartRange === chartSelection.range
     ) {
-      return NextResponse.json(cached.payload);
+      return NextResponse.json(cached.payload, {
+        headers: { "x-signaldesk-cache": "memory" },
+      });
     }
-    if (cached.expiresAt <= now) tickerCache.delete(tickerRaw);
+    if (cached.expiresAt <= now) tickerCache.delete(memKey);
   }
 
   const tdInterval = chartIntervalToTwelveData(chartSelection.interval);
@@ -350,6 +465,13 @@ export async function GET(req: Request) {
     if (candles.length === 0 && chartWarning) {
       console.error("Twelve Data chart empty:", chartWarning);
     }
+    const tdChartErr = (chartWarning ?? "").toLowerCase();
+    if (
+      candles.length === 0 &&
+      /limit|credit|quota|rate|maximum|exceed/i.test(tdChartErr)
+    ) {
+      throw new Error(chartWarning ?? "Twelve Data chart unavailable");
+    }
 
     const articles = topNews.map((a) => ({
       title: a.headline ?? "Untitled",
@@ -363,22 +485,46 @@ export async function GET(req: Request) {
 
     const headlines = articles.map((a) => a.title).filter(Boolean);
     const groq = new Groq({ apiKey: groqApiKey });
+    const deterministicTechnical = analyzeTechnicalSignals(candles);
+    const recentCandles = candles.slice(-20).map((c) => ({
+      t: c.label,
+      o: round2(c.open),
+      h: round2(c.high),
+      l: round2(c.low),
+      c: round2(c.close),
+    }));
+
+    const combinedUser = [
+      `Ticker: ${tickerRaw}`,
+      "",
+      "HEADLINES:",
+      headlines.join("\n"),
+      "",
+      "TECHNICAL_SCAN:",
+      JSON.stringify({
+        chartInterval: chartSelection.interval,
+        chartRange: chartSelection.range,
+        technicalSummary: deterministicTechnical.summary,
+        topSignals: deterministicTechnical.signals.slice(0, 8),
+        recentCandles,
+      }),
+    ].join("\n");
 
     const completion = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Ticker: ${tickerRaw}\n\nHeadlines:\n${headlines.join("\n")}`,
-        },
+        { role: "system", content: COMBINED_AI_SYSTEM_PROMPT },
+        { role: "user", content: combinedUser },
       ],
     });
 
     const rawContent = completion.choices[0]?.message?.content ?? "";
     let analysis: ReturnType<typeof parseAnalysisJson>;
+    let technicalAi: ReturnType<typeof parseTechnicalAnalysisJson>;
     try {
-      analysis = parseAnalysisJson(rawContent);
+      const parsed = parseCombinedAiJson(rawContent);
+      analysis = parsed.analysis;
+      technicalAi = parsed.technicalAi;
     } catch {
       analysis = {
         sentiment: "neutral",
@@ -386,6 +532,24 @@ export async function GET(req: Request) {
         key_factors: ["—", "—", "—"],
         summary:
           "AI analysis could not be parsed. Try again or check headlines availability.",
+      };
+      technicalAi = {
+        bias: deterministicTechnical.summary.bias,
+        confidence: deterministicTechnical.summary.confidence,
+        key_factors: [
+          deterministicTechnical.summary.notes[0] ?? "Signal cluster is mixed.",
+          deterministicTechnical.summary.notes[1] ??
+            "Primary technical context is weak.",
+          deterministicTechnical.summary.notes[2] ?? "Use strict risk controls.",
+        ],
+        summary:
+          "Technical AI commentary could not be parsed. Showing deterministic technical scan instead.",
+        invalidation:
+          deterministicTechnical.summary.bias === "bullish"
+            ? "Invalid if price closes below nearest key support/liquidity level."
+            : deterministicTechnical.summary.bias === "bearish"
+              ? "Invalid if price closes above nearest key resistance/liquidity level."
+              : "Invalid if price decisively breaks the nearest key level cluster.",
       };
     }
     const closes = priceHistory.map((p) => p.price);
@@ -428,17 +592,56 @@ export async function GET(req: Request) {
       tradeSuggestion,
       articles,
       analysis,
+      technicalAnalysis: {
+        ...deterministicTechnical,
+        ai: technicalAi,
+      },
     };
 
-    tickerCache.set(tickerRaw, {
-      expiresAt: Date.now() + CACHE_TTL_MS,
+    tickerCache.set(memKey, {
+      expiresAt: Date.now() + memoryCacheTtlMs(),
       payload: responsePayload,
     });
 
-    return NextResponse.json(responsePayload);
+    if (redis) {
+      const body = JSON.stringify(responsePayload);
+      const hotTtl = env.stocksCacheTtlSeconds();
+      const staleTtl = env.stocksStaleTtlSeconds();
+      await Promise.all([
+        redis.set(redisStockKey, body, { ex: hotTtl }),
+        redis.set(redisStaleKey, body, { ex: staleTtl }),
+      ]);
+    }
+
+    return NextResponse.json(responsePayload, {
+      headers: { "x-signaldesk-cache": "miss" },
+    });
   } catch (err) {
     console.error(err);
     const message = err instanceof Error ? err.message : "Internal server error";
+
+    if (redis) {
+      try {
+        const staleBody = await redis.get(redisStaleKey);
+        if (typeof staleBody === "string" && staleBody.length > 0) {
+          const payload = JSON.parse(staleBody) as StocksApiResponse;
+          const note =
+            "Live data providers are rate-limited or unavailable; showing last successful snapshot.";
+          return NextResponse.json(
+            {
+              ...payload,
+              chartWarning: payload.chartWarning
+                ? `${payload.chartWarning} ${note}`
+                : note,
+            },
+            { headers: { "x-signaldesk-cache": "stale" } },
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

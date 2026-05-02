@@ -153,9 +153,10 @@ function envFlagEnabled(raw: string | undefined, fallback = true): boolean {
   );
 }
 
+/** Opt-in on Vercel: set NEXT_PUBLIC_TOP_OPPORTUNITIES_ENABLED=true to show panels + fetch. */
 const TOP_OPPORTUNITIES_ENABLED = envFlagEnabled(
   process.env.NEXT_PUBLIC_TOP_OPPORTUNITIES_ENABLED,
-  true,
+  false,
 );
 
 function takeProfitForRewardRisk(

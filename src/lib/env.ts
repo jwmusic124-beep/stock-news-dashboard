@@ -27,11 +27,12 @@ export const env = {
   groqApiKey(): string {
     return process.env.GROQ_API_KEY?.trim() ?? "";
   },
+  /** Opt-in: set TOP_OPPORTUNITIES_ENABLED or NEXT_PUBLIC_TOP_OPPORTUNITIES_ENABLED to true. */
   topOpportunitiesEnabled(): boolean {
     return envFlagEnabled(
       process.env.TOP_OPPORTUNITIES_ENABLED?.trim() ||
         process.env.NEXT_PUBLIC_TOP_OPPORTUNITIES_ENABLED?.trim(),
-      true,
+      false,
     );
   },
   /** Seconds for hot `/api/stocks` cache in Redis (default 15m). */
